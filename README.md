@@ -73,3 +73,4 @@ Open your browser to `http://localhost:4000`.
 - **Frontend**: React 18, Vite, Tailwind CSS, Lucide Icons, Socket.io-client
 - **Backend**: Node.js, Express, Socket.io, `yt-search`
 - **Audio Provider**: YouTube IFrame Player API
+

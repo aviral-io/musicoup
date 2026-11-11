@@ -236,6 +236,12 @@ class RoomManager {
     const room = this.getRoom(code);
     if (!room) return null;
 
+    const now = Date.now();
+    if (room.lastTrackChange && (now - room.lastTrackChange < 1500)) {
+      return room;
+    }
+    room.lastTrackChange = now;
+
     if (room.queue.length > 0) {
       const nextSong = room.queue.shift();
       room.currentSong = nextSong;
@@ -326,3 +332,4 @@ class RoomManager {
 }
 
 export default new RoomManager();
+

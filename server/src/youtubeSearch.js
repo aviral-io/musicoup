@@ -3,7 +3,7 @@ import yts from 'yt-search';
 // Extract YouTube Video ID from various link formats
 export function extractYouTubeId(url) {
   if (!url) return null;
-  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|shorts\/|watch\?v=|&v=)([^#&?]*).*/;
   const match = url.match(regExp);
   return (match && match[2].length === 11) ? match[2] : null;
 }
@@ -61,3 +61,4 @@ export async function searchYouTube(query) {
     return [];
   }
 }
+

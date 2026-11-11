@@ -10,7 +10,9 @@ import {
   Music, 
   Radio, 
   CheckCircle2, 
-  AlertCircle 
+  AlertCircle,
+  Tv,
+  Image as ImageIcon
 } from 'lucide-react';
 
 export default function Player() {
@@ -20,7 +22,9 @@ export default function Player() {
   const isCouple = room?.mode === 'couple';
 
   const playerRef = useRef(null);
-  const containerRef = useRef(null);
+  const isHostRef = useRef(isHost);
+  isHostRef.current = isHost;
+
   const [isReady, setIsReady] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -29,29 +33,20 @@ export default function Player() {
   const [isMuted, setIsMuted] = useState(false);
   const [isDrifting, setIsDrifting] = useState(false);
   const [needsUserInteraction, setNeedsUserInteraction] = useState(false);
+  const [showVideo, setShowVideo] = useState(false);
+  const [isSeeking, setIsSeeking] = useState(false);
 
-  // Load YouTube IFrame API script
+  // Initialize YouTube IFrame API safely
   useEffect(() => {
-    if (!window.YT) {
-      const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
-      const firstScriptTag = document.getElementsByTagName('script')[0];
-      firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+    let checkInterval = null;
 
-      window.onYouTubeIframeAPIReady = () => {
-        initPlayer();
-      };
-    } else {
-      initPlayer();
-    }
-
-    function initPlayer() {
+    const startPlayer = () => {
       if (playerRef.current) return;
+      if (!window.YT || !window.YT.Player) return;
 
-      playerRef.current = new window.YT.Player('youtube-player-frame', {
+      const playerConfig = {
         height: '100%',
         width: '100%',
-        videoId: currentSong?.id || '',
         playerVars: {
           autoplay: 1,
           controls: 0,
@@ -65,8 +60,14 @@ export default function Player() {
           onReady: (event) => {
             setIsReady(true);
             event.target.setVolume(volume);
-            if (playback?.status === 'playing') {
-              tryPlay();
+
+            if (currentSong?.id) {
+              event.target.loadVideoById(currentSong.id, playback?.currentTime || 0);
+              if (playback?.status === 'playing') {
+                tryPlay();
+              } else {
+                event.target.pauseVideo();
+              }
             }
           },
           onStateChange: (event) => {
@@ -77,30 +78,69 @@ export default function Player() {
               setIsPlaying(false);
             } else if (event.data === window.YT.PlayerState.ENDED) {
               setIsPlaying(false);
-              // Auto skip to next
-              playNext();
+              // Only the host triggers playNext to avoid race condition/double skips
+              if (isHostRef.current) {
+                playNext();
+              }
             }
           },
           onError: (err) => {
             console.error('YouTube player error:', err);
           }
         }
-      });
+      };
+
+      if (currentSong?.id) {
+        playerConfig.videoId = currentSong.id;
+      }
+
+      try {
+        playerRef.current = new window.YT.Player('youtube-player-frame', playerConfig);
+      } catch (e) {
+        console.error('Error mounting YT player:', e);
+      }
+    };
+
+    if (window.YT && window.YT.Player) {
+      startPlayer();
+    } else {
+      if (!document.getElementById('yt-iframe-script')) {
+        const tag = document.createElement('script');
+        tag.id = 'yt-iframe-script';
+        tag.src = 'https://www.youtube.com/iframe_api';
+        document.head.appendChild(tag);
+      }
+
+      const prevCallback = window.onYouTubeIframeAPIReady;
+      window.onYouTubeIframeAPIReady = () => {
+        if (prevCallback) prevCallback();
+        startPlayer();
+      };
+
+      checkInterval = setInterval(() => {
+        if (window.YT && window.YT.Player) {
+          clearInterval(checkInterval);
+          startPlayer();
+        }
+      }, 150);
     }
 
     return () => {
-      // Keep player intact across renders or clean up
+      if (checkInterval) clearInterval(checkInterval);
     };
   }, []);
 
   const tryPlay = () => {
     if (!playerRef.current || !playerRef.current.playVideo) return;
-    const promise = playerRef.current.playVideo();
-    // Catch browser autoplay prevention
-    if (promise !== undefined) {
-      promise.catch?.(() => {
-        setNeedsUserInteraction(true);
-      });
+    try {
+      const promise = playerRef.current.playVideo();
+      if (promise !== undefined) {
+        promise.catch?.(() => {
+          setNeedsUserInteraction(true);
+        });
+      }
+    } catch (e) {
+      setNeedsUserInteraction(true);
     }
   };
 
@@ -109,17 +149,23 @@ export default function Player() {
     if (!playerRef.current || !isReady) return;
 
     if (currentSong?.id) {
-      const currentVideoUrl = playerRef.current.getVideoUrl?.() || '';
-      if (!currentVideoUrl.includes(currentSong.id)) {
-        playerRef.current.loadVideoById(currentSong.id, playback?.currentTime || 0);
-        if (playback?.status === 'playing') {
-          tryPlay();
-        } else {
-          playerRef.current.pauseVideo();
+      try {
+        const currentVideoUrl = playerRef.current.getVideoUrl?.() || '';
+        if (!currentVideoUrl.includes(currentSong.id)) {
+          playerRef.current.loadVideoById(currentSong.id, playback?.currentTime || 0);
+          if (playback?.status === 'playing') {
+            tryPlay();
+          } else {
+            playerRef.current.pauseVideo();
+          }
         }
+      } catch (e) {
+        console.error('Error updating video by id:', e);
       }
     } else {
-      playerRef.current.stopVideo?.();
+      try {
+        playerRef.current.stopVideo?.();
+      } catch (e) {}
       setIsPlaying(false);
       setCurrentTime(0);
     }
@@ -138,32 +184,38 @@ export default function Player() {
     const timeDiff = Math.abs(localTime - expectedTime);
 
     // If drift is more than 1.2 seconds, resync
-    if (timeDiff > 1.2) {
+    if (timeDiff > 1.2 && !isSeeking) {
       setIsDrifting(true);
-      player.seekTo(expectedTime, true);
+      try {
+        player.seekTo(expectedTime, true);
+      } catch (e) {}
       setTimeout(() => setIsDrifting(false), 800);
     }
 
     if (playback.status === 'playing') {
       tryPlay();
     } else if (playback.status === 'paused') {
-      player.pauseVideo();
+      try {
+        player.pauseVideo();
+      } catch (e) {}
     }
-  }, [playback?.status, playback?.lastUpdated, isReady]);
+  }, [playback?.status, playback?.currentTime, playback?.lastUpdated, isReady]);
 
   // Interval timer for local progress bar
   useEffect(() => {
     const timer = setInterval(() => {
-      if (playerRef.current && isReady && playerRef.current.getCurrentTime) {
-        const time = playerRef.current.getCurrentTime() || 0;
-        const dur = playerRef.current.getDuration() || currentSong?.duration || 0;
-        setCurrentTime(time);
-        if (dur > 0) setDuration(dur);
+      if (playerRef.current && isReady && playerRef.current.getCurrentTime && !isSeeking) {
+        try {
+          const time = playerRef.current.getCurrentTime() || 0;
+          const dur = playerRef.current.getDuration() || currentSong?.duration || 0;
+          setCurrentTime(time);
+          if (dur > 0) setDuration(dur);
+        } catch (e) {}
       }
     }, 400);
 
     return () => clearInterval(timer);
-  }, [isReady, currentSong]);
+  }, [isReady, currentSong, isSeeking]);
 
   // Controls
   const togglePlayPause = () => {
@@ -173,12 +225,20 @@ export default function Player() {
     syncPlayback({ status: nextStatus, currentTime: time });
   };
 
-  const handleSeek = (e) => {
+  const handleSeekChange = (e) => {
+    if (!currentSong) return;
+    setIsSeeking(true);
+    setCurrentTime(parseFloat(e.target.value));
+  };
+
+  const handleSeekEnd = (e) => {
     if (!currentSong) return;
     const newTime = parseFloat(e.target.value);
-    setCurrentTime(newTime);
+    setIsSeeking(false);
     if (playerRef.current?.seekTo) {
-      playerRef.current.seekTo(newTime, true);
+      try {
+        playerRef.current.seekTo(newTime, true);
+      } catch (err) {}
     }
     syncPlayback({ status: isPlaying ? 'playing' : 'paused', currentTime: newTime });
   };
@@ -187,22 +247,26 @@ export default function Player() {
     const val = parseInt(e.target.value);
     setVolume(val);
     if (playerRef.current?.setVolume) {
-      playerRef.current.setVolume(val);
-      if (val === 0) setIsMuted(true);
-      else setIsMuted(false);
+      try {
+        playerRef.current.setVolume(val);
+        if (val === 0) setIsMuted(true);
+        else setIsMuted(false);
+      } catch (e) {}
     }
   };
 
   const toggleMute = () => {
     if (!playerRef.current) return;
-    if (isMuted) {
-      playerRef.current.unMute();
-      playerRef.current.setVolume(volume || 50);
-      setIsMuted(false);
-    } else {
-      playerRef.current.mute();
-      setIsMuted(true);
-    }
+    try {
+      if (isMuted) {
+        playerRef.current.unMute();
+        playerRef.current.setVolume(volume || 50);
+        setIsMuted(false);
+      } else {
+        playerRef.current.mute();
+        setIsMuted(true);
+      }
+    } catch (e) {}
   };
 
   const forceResync = () => {
@@ -210,10 +274,12 @@ export default function Player() {
     const now = Date.now();
     const elapsed = playback.status === 'playing' ? (now - playback.lastUpdated) / 1000 : 0;
     const expectedTime = playback.currentTime + elapsed;
-    playerRef.current.seekTo(expectedTime, true);
-    if (playback.status === 'playing') {
-      tryPlay();
-    }
+    try {
+      playerRef.current.seekTo(expectedTime, true);
+      if (playback.status === 'playing') {
+        tryPlay();
+      }
+    } catch (e) {}
     setIsDrifting(false);
   };
 
@@ -232,11 +298,6 @@ export default function Player() {
         ? 'glass-panel-couple shadow-rose-950/40 border-rose-500/20' 
         : 'glass-panel shadow-cyan-950/30 border-cyan-500/20'
     }`}>
-      {/* Hidden YouTube IFrame embed (always active in background) */}
-      <div className="absolute opacity-0 pointer-events-none w-1 h-1 overflow-hidden">
-        <div id="youtube-player-frame"></div>
-      </div>
-
       {/* Autoplay blocker prompt */}
       {needsUserInteraction && (
         <div className="mb-4 p-3 bg-amber-500/20 border border-amber-500/40 rounded-xl flex items-center justify-between animate-pulse">
@@ -256,39 +317,53 @@ export default function Player() {
         </div>
       )}
 
-      {/* Track Info & Visualizer */}
+      {/* Track Info & Visualizer / Video Frame */}
       <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-8 mb-6">
-        {/* Album Artwork / Thumbnail */}
-        <div className="relative group w-36 h-36 sm:w-44 sm:h-44 rounded-2xl overflow-hidden shadow-xl flex-shrink-0 bg-slate-900 border border-white/10">
-          {currentSong ? (
-            <>
-              <img
-                src={currentSong.thumbnail}
-                alt={currentSong.title}
-                className={`w-full h-full object-cover transition-transform duration-700 ${
-                  isPlaying ? 'scale-105 rotate-0' : 'scale-100 opacity-80'
-                }`}
-              />
-              {isPlaying && (
-                <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent flex items-end justify-center pb-3">
-                  <div className="flex items-end gap-1 h-5">
-                    <span className={`w-1 bg-white rounded-full equalizer-bar-1`}></span>
-                    <span className={`w-1 bg-white rounded-full equalizer-bar-2`}></span>
-                    <span className={`w-1 bg-white rounded-full equalizer-bar-3`}></span>
-                    <span className={`w-1 bg-white rounded-full equalizer-bar-4`}></span>
+        {/* Media Frame: Album Art or Video */}
+        <div className="relative group w-44 h-44 sm:w-52 sm:h-52 rounded-2xl overflow-hidden shadow-xl flex-shrink-0 bg-slate-900 border border-white/10 flex items-center justify-center">
+          {/* Cover Art view */}
+          <div className={`absolute inset-0 transition-opacity duration-300 ${showVideo ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
+            {currentSong ? (
+              <>
+                <img
+                  src={currentSong.thumbnail}
+                  alt={currentSong.title}
+                  className={`w-full h-full object-cover transition-transform duration-700 ${
+                    isPlaying ? 'scale-105' : 'scale-100 opacity-80'
+                  }`}
+                />
+                {isPlaying && (
+                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-center pb-3">
+                    <div className="flex items-end gap-1 h-5">
+                      <span className="w-1 bg-white rounded-full equalizer-bar-1"></span>
+                      <span className="w-1 bg-white rounded-full equalizer-bar-2"></span>
+                      <span className="w-1 bg-white rounded-full equalizer-bar-3"></span>
+                      <span className="w-1 bg-white rounded-full equalizer-bar-4"></span>
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 gap-2">
-              <Music size={40} className="animate-pulse" />
-              <span className="text-xs font-medium">Queue is empty</span>
-            </div>
-          )}
+                )}
+              </>
+            ) : (
+              <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 gap-2">
+                <Music size={40} className="animate-pulse" />
+                <span className="text-xs font-medium">Queue is empty</span>
+              </div>
+            )}
+          </div>
+
+          {/* YouTube IFrame: either shown right here or kept with valid dimensions offscreen */}
+          <div
+            className={`transition-all duration-300 ${
+              showVideo
+                ? 'absolute inset-0 w-full h-full z-10'
+                : 'absolute w-[320px] h-[180px] pointer-events-none -top-[9999px] -left-[9999px]'
+            }`}
+          >
+            <div id="youtube-player-frame" className="w-full h-full"></div>
+          </div>
         </div>
 
-        {/* Title, Artist, Sync status */}
+        {/* Title, Artist, Controls */}
         <div className="flex-1 text-center sm:text-left min-w-0 w-full">
           <div className="flex flex-wrap items-center justify-center sm:justify-start gap-2 mb-2">
             <span className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${
@@ -317,6 +392,17 @@ export default function Player() {
               <RefreshCw size={11} />
               Resync
             </button>
+
+            {/* Toggle Video / Cover Art */}
+            {currentSong && (
+              <button
+                onClick={() => setShowVideo(!showVideo)}
+                className="text-xs text-slate-300 hover:text-white flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition"
+              >
+                {showVideo ? <ImageIcon size={12} /> : <Tv size={12} />}
+                <span>{showVideo ? 'Cover Art' : 'Watch Video'}</span>
+              </button>
+            )}
           </div>
 
           <h2 className="text-xl sm:text-2xl font-extrabold text-white truncate drop-shadow-sm">
@@ -342,7 +428,9 @@ export default function Player() {
             min="0"
             max={duration || 100}
             value={currentTime}
-            onChange={handleSeek}
+            onChange={handleSeekChange}
+            onMouseUp={handleSeekEnd}
+            onTouchEnd={handleSeekEnd}
             disabled={!currentSong}
             className="w-full h-2 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-rose-500 hover:accent-rose-400 transition"
             style={{
