@@ -141,3 +141,4 @@ assert.strictEqual(room.users[0].isHost, true);
 console.log('✅ Host reassignment on disconnect works perfectly! New host:', room.users[0].name);
 
 console.log('\n🎉 ALL 9 CORE TESTS PASSED SUCCESSFULLY! 🚀');
+
