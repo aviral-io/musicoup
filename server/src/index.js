@@ -65,13 +65,18 @@ app.get('/api/rooms/:code', (req, res) => {
   });
 });
 
-// Helper to sanitize room state for clients (converts Sets to Arrays)
+// Helper to sanitize room state for clients (converts Sets to Arrays and syncs accurate clock)
 function serializeRoom(room) {
   if (!room) return null;
+  const interpolated = roomManager.getInterpolatedTime(room);
   return {
     ...room,
+    playback: {
+      ...room.playback,
+      currentTime: interpolated
+    },
     votesToSkip: Array.from(room.votesToSkip || []),
-    estimatedCurrentTime: roomManager.getInterpolatedTime(room)
+    estimatedCurrentTime: interpolated
   };
 }
 
@@ -146,6 +151,19 @@ io.on('connection', (socket) => {
         currentTime: room.playback.currentTime,
         serverTimestamp: Date.now(),
         updatedBy: socket.id
+      });
+    }
+  });
+
+  // Host Heartbeat (Host sends current timestamp every 6s to keep room softly aligned)
+  socket.on('host_heartbeat', ({ code, currentTime }) => {
+    const room = roomManager.getRoom(code);
+    if (room && room.hostId === socket.id && room.playback.status === 'playing') {
+      room.playback.currentTime = currentTime;
+      room.playback.lastUpdated = Date.now();
+      socket.to(room.code).emit('heartbeat_sync', {
+        currentTime,
+        serverTimestamp: Date.now()
       });
     }
   });

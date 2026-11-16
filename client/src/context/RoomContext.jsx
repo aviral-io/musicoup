@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import { socket } from '../socket';
 
 const RoomContext = createContext(null);
@@ -14,13 +14,13 @@ export const useRoom = () => {
 export const RoomProvider = ({ children }) => {
   const [currentUser, setCurrentUser] = useState(() => {
     const saved = localStorage.getItem('musicoup_user');
-    return saved ? JSON.parse(saved) : { name: '', avatar: '🎧' };
+    return saved ? JSON.parse(saved) : { name: '', avatar: '💖' };
   });
 
   const [room, setRoom] = useState(null);
-  const [inSync, setInSync] = useState(true);
   const [floatingReactions, setFloatingReactions] = useState([]);
-  const [serverTimeOffset, setServerTimeOffset] = useState(0);
+  const [syncCommand, setSyncCommand] = useState(null);
+  const [heartbeatSync, setHeartbeatSync] = useState(null);
 
   // Save user profile
   const updateUserProfile = (name, avatar) => {
@@ -30,12 +30,12 @@ export const RoomProvider = ({ children }) => {
   };
 
   useEffect(() => {
-    // Listen for room state updates
+    // Listen for full room state updates
     const handleRoomState = (state) => {
       setRoom(state);
     };
 
-    // Listen for playback update
+    // Listen for direct playback actions (Play / Pause / Seek)
     const handlePlaybackUpdate = (playbackData) => {
       setRoom((prev) => {
         if (!prev) return prev;
@@ -49,6 +49,19 @@ export const RoomProvider = ({ children }) => {
           }
         };
       });
+      // Trigger immediate sync command for the player
+      setSyncCommand({
+        ...playbackData,
+        receivedAt: Date.now()
+      });
+    };
+
+    // Listen for periodic host heartbeat (soft drift check)
+    const handleHeartbeatSync = (data) => {
+      setHeartbeatSync({
+        ...data,
+        receivedAt: Date.now()
+      });
     };
 
     // Listen for floating reactions
@@ -56,7 +69,6 @@ export const RoomProvider = ({ children }) => {
       const id = `${reaction.id}-${Date.now()}`;
       setFloatingReactions((prev) => [...prev, { ...reaction, id }]);
 
-      // Remove after animation completes (3 seconds)
       setTimeout(() => {
         setFloatingReactions((prev) => prev.filter((r) => r.id !== id));
       }, 3000);
@@ -73,23 +85,18 @@ export const RoomProvider = ({ children }) => {
       });
     };
 
-    // Listen for couple notes update
-    const handleCoupleNotes = ({ notes }) => {
-      setRoom((prev) => (prev ? { ...prev, coupleNotes: notes } : prev));
-    };
-
     socket.on('room_state', handleRoomState);
     socket.on('playback_update', handlePlaybackUpdate);
+    socket.on('heartbeat_sync', handleHeartbeatSync);
     socket.on('new_reaction', handleNewReaction);
     socket.on('new_chat', handleNewChat);
-    socket.on('couple_notes_updated', handleCoupleNotes);
 
     return () => {
       socket.off('room_state', handleRoomState);
       socket.off('playback_update', handlePlaybackUpdate);
+      socket.off('heartbeat_sync', handleHeartbeatSync);
       socket.off('new_reaction', handleNewReaction);
       socket.off('new_chat', handleNewChat);
-      socket.off('couple_notes_updated', handleCoupleNotes);
     };
   }, []);
 
@@ -131,6 +138,14 @@ export const RoomProvider = ({ children }) => {
     socket.emit('sync_playback', {
       code: room.code,
       status,
+      currentTime
+    });
+  };
+
+  const sendHostHeartbeat = (currentTime) => {
+    if (!room || room.hostId !== socket.id) return;
+    socket.emit('host_heartbeat', {
+      code: room.code,
       currentTime
     });
   };
@@ -180,14 +195,6 @@ export const RoomProvider = ({ children }) => {
     });
   };
 
-  const updateCoupleNotes = (notes) => {
-    if (!room) return;
-    socket.emit('update_couple_notes', {
-      code: room.code,
-      notes
-    });
-  };
-
   const isHost = room && room.hostId === socket.id;
 
   return (
@@ -198,24 +205,23 @@ export const RoomProvider = ({ children }) => {
         updateUserProfile,
         isHost,
         socketId: socket.id,
-        inSync,
-        setInSync,
         floatingReactions,
+        syncCommand,
+        heartbeatSync,
         createRoom,
         joinRoom,
         leaveRoom,
         syncPlayback,
+        sendHostHeartbeat,
         addToQueue,
         removeFromQueue,
         playNext,
         voteSkip,
         sendChat,
-        sendReaction,
-        updateCoupleNotes
+        sendReaction
       }}
     >
       {children}
     </RoomContext.Provider>
   );
 };
-

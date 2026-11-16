@@ -16,7 +16,17 @@ import {
 } from 'lucide-react';
 
 export default function Player() {
-  const { room, syncPlayback, playNext, isHost } = useRoom();
+  const { 
+    room, 
+    syncPlayback, 
+    sendHostHeartbeat, 
+    playNext, 
+    isHost, 
+    socketId, 
+    syncCommand, 
+    heartbeatSync 
+  } = useRoom();
+
   const currentSong = room?.currentSong;
   const playback = room?.playback;
   const isCouple = room?.mode === 'couple';
@@ -32,11 +42,11 @@ export default function Player() {
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
   const [isDrifting, setIsDrifting] = useState(false);
-  const [needsUserInteraction, setNeedsUserInteraction] = useState(false);
+  const [needsTapToPlay, setNeedsTapToPlay] = useState(false);
   const [showVideo, setShowVideo] = useState(false);
   const [isSeeking, setIsSeeking] = useState(false);
 
-  // Initialize YouTube IFrame API safely
+  // 1. Initialize YouTube Player
   useEffect(() => {
     let checkInterval = null;
 
@@ -54,6 +64,7 @@ export default function Player() {
           fs: 0,
           modestbranding: 1,
           rel: 0,
+          playsinline: 1, // Crucial for mobile iOS & Android browsers!
           origin: window.location.origin,
         },
         events: {
@@ -62,7 +73,8 @@ export default function Player() {
             event.target.setVolume(volume);
 
             if (currentSong?.id) {
-              event.target.loadVideoById(currentSong.id, playback?.currentTime || 0);
+              const startAt = playback?.currentTime || 0;
+              event.target.loadVideoById(currentSong.id, startAt);
               if (playback?.status === 'playing') {
                 tryPlay();
               } else {
@@ -73,12 +85,12 @@ export default function Player() {
           onStateChange: (event) => {
             if (event.data === window.YT.PlayerState.PLAYING) {
               setIsPlaying(true);
-              setNeedsUserInteraction(false);
+              setNeedsTapToPlay(false);
             } else if (event.data === window.YT.PlayerState.PAUSED) {
               setIsPlaying(false);
             } else if (event.data === window.YT.PlayerState.ENDED) {
               setIsPlaying(false);
-              // Only the host triggers playNext to avoid race condition/double skips
+              // Only host triggers skip to prevent duplicate skips
               if (isHostRef.current) {
                 playNext();
               }
@@ -136,23 +148,38 @@ export default function Player() {
       const promise = playerRef.current.playVideo();
       if (promise !== undefined) {
         promise.catch?.(() => {
-          setNeedsUserInteraction(true);
+          setNeedsTapToPlay(true);
         });
       }
     } catch (e) {
-      setNeedsUserInteraction(true);
+      setNeedsTapToPlay(true);
     }
   };
 
-  // When song changes in room state
+  // Direct user tap to unlock mobile autoplay restriction
+  const handleUserUnlockPlay = () => {
+    if (!playerRef.current) return;
+    try {
+      const targetTime = playback?.currentTime || 0;
+      playerRef.current.seekTo(targetTime, true);
+      playerRef.current.playVideo();
+      setNeedsTapToPlay(false);
+      setIsPlaying(true);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // 2. Track Change: When song changes in room state
   useEffect(() => {
     if (!playerRef.current || !isReady) return;
 
     if (currentSong?.id) {
       try {
-        const currentVideoUrl = playerRef.current.getVideoUrl?.() || '';
-        if (!currentVideoUrl.includes(currentSong.id)) {
-          playerRef.current.loadVideoById(currentSong.id, playback?.currentTime || 0);
+        const currentUrl = playerRef.current.getVideoUrl?.() || '';
+        if (!currentUrl.includes(currentSong.id)) {
+          const startTime = playback?.currentTime || 0;
+          playerRef.current.loadVideoById(currentSong.id, startTime);
           if (playback?.status === 'playing') {
             tryPlay();
           } else {
@@ -160,7 +187,7 @@ export default function Player() {
           }
         }
       } catch (e) {
-        console.error('Error updating video by id:', e);
+        console.error('Error loading video by id:', e);
       }
     } else {
       try {
@@ -171,37 +198,68 @@ export default function Player() {
     }
   }, [currentSong?.id, isReady]);
 
-  // Handle Playback State Sync from Socket
+  // 3. Event-Driven Sync: When Play / Pause / Seek command arrives from socket
   useEffect(() => {
-    if (!playerRef.current || !isReady || !playback) return;
+    if (!syncCommand || !playerRef.current || !isReady) return;
+
+    // If I was the one who sent this action, ignore to avoid self-jitter
+    if (syncCommand.updatedBy && syncCommand.updatedBy === socketId) {
+      return;
+    }
 
     const player = playerRef.current;
-    const now = Date.now();
-    const elapsed = playback.status === 'playing' ? (now - playback.lastUpdated) / 1000 : 0;
-    const expectedTime = playback.currentTime + elapsed;
+    const targetTime = Number(syncCommand.currentTime) || 0;
 
+    if (syncCommand.status === 'paused') {
+      try {
+        player.pauseVideo();
+        player.seekTo(targetTime, true);
+        setIsPlaying(false);
+      } catch (e) {}
+    } else if (syncCommand.status === 'playing') {
+      try {
+        player.seekTo(targetTime, true);
+        tryPlay();
+      } catch (e) {}
+    }
+  }, [syncCommand, isReady, socketId]);
+
+  // 4. Soft Heartbeat Sync from Host (Only checks every ~6s, only seeks if drift > 3s)
+  useEffect(() => {
+    if (!heartbeatSync || !playerRef.current || !isReady || isHost) return;
+
+    const player = playerRef.current;
+    const hostTime = Number(heartbeatSync.currentTime) || 0;
     const localTime = player.getCurrentTime ? player.getCurrentTime() : 0;
-    const timeDiff = Math.abs(localTime - expectedTime);
+    const drift = Math.abs(localTime - hostTime);
 
-    // If drift is more than 1.2 seconds, resync
-    if (timeDiff > 1.2 && !isSeeking) {
+    // Only align if real lag happened (> 3.0s drift)
+    if (drift > 3.0 && !isSeeking) {
       setIsDrifting(true);
       try {
-        player.seekTo(expectedTime, true);
+        player.seekTo(hostTime, true);
       } catch (e) {}
       setTimeout(() => setIsDrifting(false), 800);
     }
+  }, [heartbeatSync, isReady, isHost, isSeeking]);
 
-    if (playback.status === 'playing') {
-      tryPlay();
-    } else if (playback.status === 'paused') {
-      try {
-        player.pauseVideo();
-      } catch (e) {}
-    }
-  }, [playback?.status, playback?.currentTime, playback?.lastUpdated, isReady]);
+  // 5. Host broadcasts its playback clock every 5s while playing
+  useEffect(() => {
+    if (!isHost || !isReady || !isPlaying || !currentSong) return;
 
-  // Interval timer for local progress bar
+    const heartbeatTimer = setInterval(() => {
+      if (playerRef.current?.getCurrentTime) {
+        try {
+          const time = playerRef.current.getCurrentTime() || 0;
+          sendHostHeartbeat(time);
+        } catch (e) {}
+      }
+    }, 5000);
+
+    return () => clearInterval(heartbeatTimer);
+  }, [isHost, isReady, isPlaying, currentSong]);
+
+  // 6. Local progress bar timer
   useEffect(() => {
     const timer = setInterval(() => {
       if (playerRef.current && isReady && playerRef.current.getCurrentTime && !isSeeking) {
@@ -219,9 +277,19 @@ export default function Player() {
 
   // Controls
   const togglePlayPause = () => {
-    if (!currentSong) return;
+    if (!currentSong || !playerRef.current) return;
     const nextStatus = isPlaying ? 'paused' : 'playing';
-    const time = playerRef.current?.getCurrentTime() || currentTime;
+    const time = playerRef.current.getCurrentTime ? playerRef.current.getCurrentTime() : currentTime;
+    
+    // Immediate local feedback
+    if (nextStatus === 'playing') {
+      tryPlay();
+    } else {
+      playerRef.current.pauseVideo?.();
+      setIsPlaying(false);
+    }
+
+    // Broadcast to room
     syncPlayback({ status: nextStatus, currentTime: time });
   };
 
@@ -271,11 +339,9 @@ export default function Player() {
 
   const forceResync = () => {
     if (!playback || !playerRef.current) return;
-    const now = Date.now();
-    const elapsed = playback.status === 'playing' ? (now - playback.lastUpdated) / 1000 : 0;
-    const expectedTime = playback.currentTime + elapsed;
+    const targetTime = Number(playback.currentTime) || 0;
     try {
-      playerRef.current.seekTo(expectedTime, true);
+      playerRef.current.seekTo(targetTime, true);
       if (playback.status === 'playing') {
         tryPlay();
       }
@@ -298,69 +364,62 @@ export default function Player() {
         ? 'glass-panel-couple shadow-rose-950/40 border-rose-500/20' 
         : 'glass-panel shadow-cyan-950/30 border-cyan-500/20'
     }`}>
-      {/* Autoplay blocker prompt */}
-      {needsUserInteraction && (
-        <div className="mb-4 p-3 bg-amber-500/20 border border-amber-500/40 rounded-xl flex items-center justify-between animate-pulse">
-          <div className="flex items-center gap-2 text-amber-200 text-sm">
-            <AlertCircle size={18} />
-            <span>Browser paused audio. Click to start sync!</span>
+      {/* Mobile Autoplay Permission Banner / Button */}
+      {(needsTapToPlay || (playback?.status === 'playing' && !isPlaying && currentSong)) && (
+        <div className="mb-5 p-4 bg-gradient-to-r from-rose-600 via-pink-600 to-purple-600 rounded-2xl flex items-center justify-between shadow-xl animate-pulse">
+          <div className="flex items-center gap-2.5 text-white text-xs sm:text-sm font-bold">
+            <Radio size={20} className="animate-spin text-amber-300" />
+            <span>Audio paused by mobile browser. Tap to sync audio!</span>
           </div>
           <button
-            onClick={() => {
-              tryPlay();
-              setNeedsUserInteraction(false);
-            }}
-            className="px-3 py-1 bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-xs rounded-lg transition"
+            onClick={handleUserUnlockPlay}
+            className="px-4 py-2 bg-white hover:bg-slate-100 text-slate-950 font-black text-xs rounded-xl shadow-lg transition active:scale-95 cursor-pointer"
           >
-            Enable Sound
+            ▶ Tap to Sync
           </button>
         </div>
       )}
 
       {/* Track Info & Visualizer / Video Frame */}
       <div className="flex flex-col sm:flex-row items-center gap-6 sm:gap-8 mb-6">
-        {/* Media Frame: Album Art or Video */}
+        {/* Media Frame: Video is always in DOM, Cover Art overlays when video is off */}
         <div className="relative group w-44 h-44 sm:w-52 sm:h-52 rounded-2xl overflow-hidden shadow-xl flex-shrink-0 bg-slate-900 border border-white/10 flex items-center justify-center">
-          {/* Cover Art view */}
-          <div className={`absolute inset-0 transition-opacity duration-300 ${showVideo ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
-            {currentSong ? (
-              <>
-                <img
-                  src={currentSong.thumbnail}
-                  alt={currentSong.title}
-                  className={`w-full h-full object-cover transition-transform duration-700 ${
-                    isPlaying ? 'scale-105' : 'scale-100 opacity-80'
-                  }`}
-                />
-                {isPlaying && (
-                  <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-center pb-3">
-                    <div className="flex items-end gap-1 h-5">
-                      <span className="w-1 bg-white rounded-full equalizer-bar-1"></span>
-                      <span className="w-1 bg-white rounded-full equalizer-bar-2"></span>
-                      <span className="w-1 bg-white rounded-full equalizer-bar-3"></span>
-                      <span className="w-1 bg-white rounded-full equalizer-bar-4"></span>
-                    </div>
-                  </div>
-                )}
-              </>
-            ) : (
-              <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 gap-2">
-                <Music size={40} className="animate-pulse" />
-                <span className="text-xs font-medium">Queue is empty</span>
-              </div>
-            )}
-          </div>
-
-          {/* YouTube IFrame: either shown right here or kept with valid dimensions offscreen */}
-          <div
-            className={`transition-all duration-300 ${
-              showVideo
-                ? 'absolute inset-0 w-full h-full z-10'
-                : 'absolute w-[320px] h-[180px] pointer-events-none -top-[9999px] -left-[9999px]'
-            }`}
-          >
+          {/* YouTube IFrame: ALWAYS placed here inside the viewport so mobile browsers never freeze it! */}
+          <div className="absolute inset-0 w-full h-full">
             <div id="youtube-player-frame" className="w-full h-full"></div>
           </div>
+
+          {/* Cover Art Overlay (Visible when user prefers cover art view) */}
+          {!showVideo && (
+            <div className="absolute inset-0 w-full h-full bg-slate-900 z-10 pointer-events-none transition-opacity duration-300">
+              {currentSong ? (
+                <>
+                  <img
+                    src={currentSong.thumbnail}
+                    alt={currentSong.title}
+                    className={`w-full h-full object-cover transition-transform duration-700 ${
+                      isPlaying ? 'scale-105' : 'scale-100 opacity-80'
+                    }`}
+                  />
+                  {isPlaying && (
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-transparent to-transparent flex items-end justify-center pb-3">
+                      <div className="flex items-end gap-1 h-5">
+                        <span className="w-1 bg-white rounded-full equalizer-bar-1"></span>
+                        <span className="w-1 bg-white rounded-full equalizer-bar-2"></span>
+                        <span className="w-1 bg-white rounded-full equalizer-bar-3"></span>
+                        <span className="w-1 bg-white rounded-full equalizer-bar-4"></span>
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 gap-2">
+                  <Music size={40} className="animate-pulse" />
+                  <span className="text-xs font-medium">Queue is empty</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Title, Artist, Controls */}
@@ -387,7 +446,7 @@ export default function Player() {
             <button
               onClick={forceResync}
               title="Resync audio with room"
-              className="text-xs text-slate-400 hover:text-white flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 transition"
+              className="text-xs text-slate-400 hover:text-white flex items-center gap-1 px-2 py-0.5 rounded-full bg-white/5 hover:bg-white/10 transition cursor-pointer"
             >
               <RefreshCw size={11} />
               Resync
@@ -397,7 +456,7 @@ export default function Player() {
             {currentSong && (
               <button
                 onClick={() => setShowVideo(!showVideo)}
-                className="text-xs text-slate-300 hover:text-white flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition"
+                className="text-xs text-slate-300 hover:text-white flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition cursor-pointer"
               >
                 {showVideo ? <ImageIcon size={12} /> : <Tv size={12} />}
                 <span>{showVideo ? 'Cover Art' : 'Watch Video'}</span>
@@ -450,7 +509,7 @@ export default function Player() {
         <div className="flex items-center gap-2">
           <button
             onClick={toggleMute}
-            className="p-2 text-slate-400 hover:text-white transition rounded-full hover:bg-white/5"
+            className="p-2 text-slate-400 hover:text-white transition rounded-full hover:bg-white/5 cursor-pointer"
           >
             {isMuted || volume === 0 ? <VolumeX size={18} /> : <Volume2 size={18} />}
           </button>
@@ -469,7 +528,7 @@ export default function Player() {
           <button
             onClick={togglePlayPause}
             disabled={!currentSong}
-            className={`w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg transition-transform transform active:scale-95 ${
+            className={`w-14 h-14 rounded-full flex items-center justify-center text-white shadow-lg transition-transform transform active:scale-95 cursor-pointer ${
               !currentSong 
                 ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
                 : isCouple 
@@ -484,7 +543,7 @@ export default function Player() {
             onClick={playNext}
             disabled={!currentSong}
             title="Skip to next song"
-            className="p-3 text-slate-300 hover:text-white transition rounded-full hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent"
+            className="p-3 text-slate-300 hover:text-white transition rounded-full hover:bg-white/10 disabled:opacity-40 disabled:hover:bg-transparent cursor-pointer"
           >
             <SkipForward size={22} />
           </button>

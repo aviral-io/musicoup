@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRoom } from '../context/RoomContext';
-import { Heart, Sparkles, HeartHandshake, Edit3, Check, Clock, Copy, Share2 } from 'lucide-react';
+import { Heart, Sparkles, Clock, Copy, Share2, Check } from 'lucide-react';
 
 const ROMANTIC_REACTIONS = [
   { emoji: '💖', label: 'Sparkling Heart' },
@@ -13,21 +13,13 @@ const ROMANTIC_REACTIONS = [
 ];
 
 export default function CoupleView() {
-  const { room, currentUser, sendReaction, updateCoupleNotes } = useRoom();
+  const { room, sendReaction } = useRoom();
   const users = room?.users || [];
   const partner1 = users[0] || { name: 'Partner 1', avatar: '💖' };
   const partner2 = users[1] || null;
 
-  const [notes, setNotes] = useState(room?.coupleNotes || '');
-  const [isEditingNotes, setIsEditingNotes] = useState(false);
   const [listeningMinutes, setListeningMinutes] = useState(0);
   const [copiedLink, setCopiedLink] = useState(false);
-
-  useEffect(() => {
-    if (room?.coupleNotes !== undefined) {
-      setNotes(room.coupleNotes);
-    }
-  }, [room?.coupleNotes]);
 
   // Session duration timer
   useEffect(() => {
@@ -41,11 +33,6 @@ export default function CoupleView() {
     const interval = setInterval(updateDuration, 10000);
     return () => clearInterval(interval);
   }, [room?.createdAt]);
-
-  const handleSaveNotes = () => {
-    updateCoupleNotes(notes);
-    setIsEditingNotes(false);
-  };
 
   const copyInviteLink = () => {
     const url = `${window.location.origin}?room=${room?.code}`;
@@ -140,7 +127,7 @@ export default function CoupleView() {
             <div className="flex items-center gap-2">
               <button
                 onClick={copyInviteLink}
-                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-rose-600/30"
+                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-rose-600/30 cursor-pointer"
               >
                 {copiedLink ? <Check size={14} /> : <Copy size={14} />}
                 <span>{copiedLink ? 'Link Copied!' : `Copy Link (Code: ${room?.code})`}</span>
@@ -149,7 +136,7 @@ export default function CoupleView() {
                 href={whatsappUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/30"
+                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/30 cursor-pointer"
               >
                 <Share2 size={14} />
                 <span>WhatsApp</span>
@@ -176,48 +163,6 @@ export default function CoupleView() {
             ))}
           </div>
         </div>
-      </div>
-
-      {/* Shared Couple Notes */}
-      <div className="p-6 rounded-3xl glass-panel-couple border border-rose-500/20">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2 text-rose-300">
-            <HeartHandshake size={18} />
-            <h4 className="text-sm font-bold text-white">Our Shared Love Note</h4>
-          </div>
-          {isEditingNotes ? (
-            <button
-              onClick={handleSaveNotes}
-              className="px-3 py-1 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold flex items-center gap-1 transition"
-            >
-              <Check size={13} /> Save Note
-            </button>
-          ) : (
-            <button
-              onClick={() => setIsEditingNotes(true)}
-              className="text-xs text-rose-300/70 hover:text-white flex items-center gap-1 transition"
-            >
-              <Edit3 size={12} /> Edit Note
-            </button>
-          )}
-        </div>
-
-        {isEditingNotes ? (
-          <textarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Write a sweet message, our song memory, or future playlist ideas..."
-            rows={3}
-            className="w-full p-3.5 bg-slate-900/80 border border-rose-500/30 rounded-2xl text-xs text-rose-100 placeholder-rose-300/40 focus:outline-none focus:border-rose-500 transition"
-          />
-        ) : (
-          <div 
-            onClick={() => setIsEditingNotes(true)}
-            className="p-4 bg-slate-900/40 rounded-2xl border border-rose-500/10 text-xs text-rose-200/90 leading-relaxed cursor-pointer hover:bg-slate-900/60 transition italic"
-          >
-            "{notes || 'Click here to write a sweet shared note together 💕'}"
-          </div>
-        )}
       </div>
     </div>
   );
