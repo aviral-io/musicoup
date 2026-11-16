@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useRoom } from '../context/RoomContext';
 import { 
   Search, 
@@ -10,14 +10,16 @@ import {
   Heart, 
   Coffee, 
   Check, 
-  Loader2 
+  Loader2,
+  TrendingUp,
+  X
 } from 'lucide-react';
 
 const QUICK_VIBES = [
-  { label: 'Romantic Lofi', query: 'Romantic lofi hip hop beats to study relax to', icon: Heart },
-  { label: 'Chill Acoustic', query: 'Ed Sheeran acoustic love songs', icon: Coffee },
-  { label: 'Party Bangers', query: 'Pop party dance hits', icon: Flame },
-  { label: 'Midnight Vibes', query: 'Midnight lofi jazz cozy rain', icon: Sparkles },
+  { label: 'Romantic Lofi', query: 'Romantic lofi hip hop beats', icon: Heart },
+  { label: 'Acoustic Love', query: 'Acoustic love songs playlist', icon: Coffee },
+  { label: 'Party Hits', query: 'Pop party dance hits', icon: Flame },
+  { label: 'Chill Rain', query: 'Midnight lofi jazz cozy rain', icon: Sparkles },
 ];
 
 export default function Queue() {
@@ -27,14 +29,60 @@ export default function Queue() {
 
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [addedIds, setAddedIds] = useState(new Set());
+
+  const searchContainerRef = useRef(null);
+
+  // Close suggestions when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (searchContainerRef.current && !searchContainerRef.current.contains(e.target)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Live Autocomplete Suggestions (Debounced 200ms)
+  useEffect(() => {
+    if (!searchQuery || searchQuery.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
+
+    // Don't show suggestions if user typed a direct URL
+    if (searchQuery.includes('http://') || searchQuery.includes('https://') || searchQuery.includes('youtu')) {
+      setSuggestions([]);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/suggest?q=${encodeURIComponent(searchQuery.trim())}`);
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(data.suggestions || []);
+          setShowSuggestions(true);
+        }
+      } catch (err) {
+        // ignore
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   const handleSearch = async (queryToSearch) => {
     const q = queryToSearch || searchQuery;
     if (!q || !q.trim()) return;
 
+    setShowSuggestions(false);
     setIsSearching(true);
+
     try {
       const res = await fetch(`/api/search?q=${encodeURIComponent(q.trim())}`);
       const data = await res.json();
@@ -48,8 +96,17 @@ export default function Queue() {
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter') {
+      setShowSuggestions(false);
       handleSearch();
+    } else if (e.key === 'Escape') {
+      setShowSuggestions(false);
     }
+  };
+
+  const handleSelectSuggestion = (suggestion) => {
+    setSearchQuery(suggestion);
+    setShowSuggestions(false);
+    handleSearch(suggestion);
   };
 
   const handleAdd = (song) => {
@@ -79,28 +136,68 @@ export default function Queue() {
         </div>
       </div>
 
-      {/* Search Input */}
-      <div className="relative mb-3">
-        <input
-          type="text"
-          placeholder="Search songs, artists, or paste YouTube link..."
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          className="w-full pl-11 pr-24 py-3 bg-slate-900/80 border border-white/10 rounded-2xl text-sm text-white placeholder-slate-400 focus:outline-none focus:border-rose-500/50 focus:ring-1 focus:ring-rose-500/50 transition"
-        />
-        <Search className="absolute left-3.5 top-3.5 text-slate-400" size={18} />
-        <button
-          onClick={() => handleSearch()}
-          disabled={isSearching || !searchQuery.trim()}
-          className={`absolute right-2 top-2 px-3 py-1.5 rounded-xl text-xs font-semibold text-white transition flex items-center gap-1 ${
-            isCouple 
-              ? 'bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500' 
-              : 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-500'
-          }`}
-        >
-          {isSearching ? <Loader2 size={13} className="animate-spin" /> : 'Search'}
-        </button>
+      {/* Search Input with Auto-Suggestions */}
+      <div ref={searchContainerRef} className="relative mb-3">
+        <div className="relative">
+          <input
+            type="text"
+            placeholder="Search songs, artists, or paste YouTube link..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onFocus={() => {
+              if (suggestions.length > 0) setShowSuggestions(true);
+            }}
+            onKeyDown={handleKeyDown}
+            className="w-full pl-11 pr-24 py-3 bg-slate-900 border border-white/10 rounded-2xl text-sm text-white placeholder-slate-400 focus:outline-none focus:border-rose-500/60 focus:ring-1 focus:ring-rose-500/60 transition"
+          />
+          <Search className="absolute left-3.5 top-3.5 text-slate-400" size={18} />
+
+          {searchQuery && (
+            <button
+              onClick={() => {
+                setSearchQuery('');
+                setSuggestions([]);
+                setShowSuggestions(false);
+              }}
+              className="absolute right-20 top-3 text-slate-500 hover:text-white p-1"
+            >
+              <X size={15} />
+            </button>
+          )}
+
+          <button
+            onClick={() => handleSearch()}
+            disabled={isSearching || !searchQuery.trim()}
+            className={`absolute right-2 top-2 px-3.5 py-1.5 rounded-xl text-xs font-bold text-white transition flex items-center gap-1.5 cursor-pointer ${
+              isCouple 
+                ? 'bg-rose-600 hover:bg-rose-500 disabled:bg-slate-800 disabled:text-slate-500' 
+                : 'bg-cyan-600 hover:bg-cyan-500 disabled:bg-slate-800 disabled:text-slate-500'
+            }`}
+          >
+            {isSearching ? <Loader2 size={13} className="animate-spin" /> : 'Search'}
+          </button>
+        </div>
+
+        {/* Live Auto-Suggestions Dropdown */}
+        {showSuggestions && suggestions.length > 0 && (
+          <div className="absolute top-full left-0 right-0 mt-2 z-30 bg-slate-900/95 backdrop-blur-xl border border-white/15 rounded-2xl shadow-2xl overflow-hidden py-1.5">
+            <div className="px-3 py-1.5 text-[10px] uppercase font-bold tracking-wider text-slate-400 border-b border-white/5 flex items-center gap-1.5">
+              <TrendingUp size={12} className={isCouple ? 'text-rose-400' : 'text-cyan-400'} />
+              <span>Suggestions</span>
+            </div>
+            {suggestions.map((item, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => handleSelectSuggestion(item)}
+                className="w-full px-4 py-2.5 text-left text-xs text-slate-200 hover:text-white hover:bg-white/10 flex items-center gap-2.5 transition group cursor-pointer"
+              >
+                <Search size={13} className="text-slate-500 group-hover:text-rose-400 flex-shrink-0" />
+                <span className="truncate">{item}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Quick Vibe Chips */}
@@ -114,7 +211,7 @@ export default function Queue() {
                 setSearchQuery(vibe.query);
                 handleSearch(vibe.query);
               }}
-              className="text-xs px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/5 transition flex items-center gap-1.5"
+              className="text-xs px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white border border-white/5 transition flex items-center gap-1.5 cursor-pointer"
             >
               <Icon size={12} className={isCouple ? 'text-rose-400' : 'text-cyan-400'} />
               <span>{vibe.label}</span>
@@ -125,14 +222,16 @@ export default function Queue() {
 
       {/* Search Results Drawer */}
       {searchResults.length > 0 && (
-        <div className="mb-6 p-3 bg-slate-900/90 rounded-2xl border border-white/10 max-h-64 overflow-y-auto space-y-2">
+        <div className="mb-6 p-3.5 bg-slate-900/95 rounded-2xl border border-white/10 max-h-72 overflow-y-auto space-y-2">
           <div className="flex items-center justify-between pb-2 border-b border-white/5 px-1">
-            <span className="text-xs font-semibold text-slate-400">Search Results</span>
+            <span className="text-xs font-semibold text-slate-300">
+              Top Matches ({searchResults.length})
+            </span>
             <button
               onClick={() => setSearchResults([])}
-              className="text-xs text-slate-500 hover:text-slate-300"
+              className="text-xs text-slate-400 hover:text-white cursor-pointer"
             >
-              Clear
+              Close
             </button>
           </div>
           {searchResults.map((song) => {
@@ -145,16 +244,18 @@ export default function Queue() {
                 <img
                   src={song.thumbnail}
                   alt={song.title}
-                  className="w-11 h-11 rounded-lg object-cover bg-slate-800 flex-shrink-0"
+                  className="w-12 h-12 rounded-lg object-cover bg-slate-800 flex-shrink-0"
                 />
                 <div className="flex-1 min-w-0">
                   <p className="text-xs font-semibold text-white truncate">{song.title}</p>
-                  <p className="text-[11px] text-slate-400 truncate">{song.artist}</p>
+                  <p className="text-[11px] text-slate-400 truncate">
+                    {song.artist} {song.durationFormatted ? `• ${song.durationFormatted}` : ''}
+                  </p>
                 </div>
                 <button
                   onClick={() => handleAdd(song)}
                   disabled={isAdded}
-                  className={`p-2 rounded-xl text-xs font-medium transition flex items-center gap-1 flex-shrink-0 ${
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition flex items-center gap-1 flex-shrink-0 cursor-pointer ${
                     isAdded
                       ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                       : isCouple
@@ -163,7 +264,7 @@ export default function Queue() {
                   }`}
                 >
                   {isAdded ? <Check size={14} /> : <Plus size={14} />}
-                  <span>{isAdded ? 'Added' : 'Add'}</span>
+                  <span>{isAdded ? 'Added' : 'Add to Queue'}</span>
                 </button>
               </div>
             );
@@ -208,7 +309,7 @@ export default function Queue() {
                 </span>
                 <button
                   onClick={() => removeFromQueue(item.queueId)}
-                  className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-rose-400 transition rounded-lg hover:bg-white/5"
+                  className="opacity-0 group-hover:opacity-100 p-1.5 text-slate-500 hover:text-rose-400 transition rounded-lg hover:bg-white/5 cursor-pointer"
                   title="Remove from queue"
                 >
                   <Trash2 size={14} />
@@ -221,4 +322,3 @@ export default function Queue() {
     </div>
   );
 }
-

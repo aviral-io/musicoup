@@ -6,7 +6,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import roomManager from './roomManager.js';
-import { searchYouTube } from './youtubeSearch.js';
+import { searchYouTube, getYouTubeSuggestions } from './youtubeSearch.js';
 
 dotenv.config();
 
@@ -47,6 +47,21 @@ app.get('/api/search', async (req, res) => {
   } catch (error) {
     console.error('Search API error:', error);
     res.status(500).json({ error: 'Failed to search music.' });
+  }
+});
+
+// Live Autocomplete Suggestions API
+app.get('/api/suggest', async (req, res) => {
+  const { q } = req.query;
+  if (!q) {
+    return res.json({ suggestions: [] });
+  }
+
+  try {
+    const suggestions = await getYouTubeSuggestions(q);
+    res.json({ suggestions });
+  } catch (error) {
+    res.json({ suggestions: [] });
   }
 });
 
