@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useRoom } from '../context/RoomContext';
-import { Heart, Sparkles, HeartHandshake, Edit3, Check, Clock } from 'lucide-react';
+import { Heart, Sparkles, HeartHandshake, Edit3, Check, Clock, Copy, Share2 } from 'lucide-react';
 
 const ROMANTIC_REACTIONS = [
   { emoji: '💖', label: 'Sparkling Heart' },
@@ -21,6 +21,7 @@ export default function CoupleView() {
   const [notes, setNotes] = useState(room?.coupleNotes || '');
   const [isEditingNotes, setIsEditingNotes] = useState(false);
   const [listeningMinutes, setListeningMinutes] = useState(0);
+  const [copiedLink, setCopiedLink] = useState(false);
 
   useEffect(() => {
     if (room?.coupleNotes !== undefined) {
@@ -45,6 +46,17 @@ export default function CoupleView() {
     updateCoupleNotes(notes);
     setIsEditingNotes(false);
   };
+
+  const copyInviteLink = () => {
+    const url = `${window.location.origin}?room=${room?.code}`;
+    navigator.clipboard.writeText(url);
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2000);
+  };
+
+  const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(
+    `Hey! Listen to music with me on MusiCoup 💕 Join my room: ${window.location.origin}?room=${room?.code}`
+  )}`;
 
   return (
     <div className="space-y-6">
@@ -96,8 +108,8 @@ export default function CoupleView() {
                   <div className="w-16 h-16 rounded-2xl border-2 border-dashed border-rose-500/30 flex items-center justify-center text-slate-500 text-sm">
                     Waiting...
                   </div>
-                  <span className="text-xs text-rose-300/60 mt-2 font-medium">Waiting for love</span>
-                  <span className="text-[10px] text-slate-500">Share room code</span>
+                  <span className="text-xs text-rose-300/80 mt-2 font-medium">Partner not joined</span>
+                  <span className="text-[10px] text-slate-400 font-mono">Code: {room?.code}</span>
                 </div>
               )}
             </div>
@@ -119,6 +131,33 @@ export default function CoupleView() {
           </div>
         </div>
 
+        {/* Invite prompt if partner has not joined yet */}
+        {!partner2 && (
+          <div className="mt-5 pt-4 border-t border-rose-500/15 flex flex-wrap items-center justify-between gap-3 bg-rose-950/20 p-3.5 rounded-2xl">
+            <span className="text-xs text-rose-200">
+              💌 Invite your partner to listen together:
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={copyInviteLink}
+                className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-rose-600/30"
+              >
+                {copiedLink ? <Check size={14} /> : <Copy size={14} />}
+                <span>{copiedLink ? 'Link Copied!' : `Copy Link (Code: ${room?.code})`}</span>
+              </button>
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-emerald-600/30"
+              >
+                <Share2 size={14} />
+                <span>WhatsApp</span>
+              </a>
+            </div>
+          </div>
+        )}
+
         {/* Quick Romantic Reactions Bar */}
         <div className="mt-6 pt-5 border-t border-rose-500/20 flex flex-wrap items-center justify-between gap-2">
           <span className="text-xs text-rose-300/80 font-medium flex items-center gap-1">
@@ -130,7 +169,7 @@ export default function CoupleView() {
                 key={emoji}
                 onClick={() => sendReaction(emoji)}
                 title={label}
-                className="w-10 h-10 rounded-xl bg-rose-950/40 hover:bg-rose-600/30 border border-rose-500/20 hover:border-rose-400/40 text-lg flex items-center justify-center transition-all transform hover:scale-125 active:scale-95"
+                className="w-10 h-10 rounded-xl bg-rose-950/40 hover:bg-rose-600/30 border border-rose-500/20 hover:border-rose-400/40 text-lg flex items-center justify-center transition-all transform hover:scale-125 active:scale-95 cursor-pointer"
               >
                 {emoji}
               </button>

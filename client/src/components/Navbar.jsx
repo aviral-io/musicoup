@@ -7,9 +7,10 @@ export default function Navbar() {
   const [copied, setCopied] = useState(false);
   const isCouple = room?.mode === 'couple';
 
-  const copyCode = () => {
+  const copyInviteLink = () => {
     if (!room?.code) return;
-    navigator.clipboard.writeText(room.code);
+    const url = `${window.location.origin}?room=${room.code}`;
+    navigator.clipboard.writeText(url);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -45,13 +46,13 @@ export default function Navbar() {
               <span>{isCouple ? 'Couple Room' : 'Party Room'}</span>
             </div>
 
-            {/* Room Code Badge */}
+            {/* Room Code Badge (Copies Invite URL) */}
             <button
-              onClick={copyCode}
-              title="Click to copy room code"
-              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono font-bold text-white transition active:scale-95"
+              onClick={copyInviteLink}
+              title="Click to copy invite link"
+              className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-mono font-bold text-white transition active:scale-95 cursor-pointer"
             >
-              <span>{room.code}</span>
+              <span>Room: {room.code}</span>
               {copied ? (
                 <Check size={13} className="text-emerald-400" />
               ) : (
@@ -63,7 +64,7 @@ export default function Navbar() {
             <button
               onClick={leaveRoom}
               title="Leave Room"
-              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition"
+              className="p-2 text-slate-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-xl transition cursor-pointer"
             >
               <LogOut size={18} />
             </button>
@@ -73,4 +74,3 @@ export default function Navbar() {
     </header>
   );
 }
-
